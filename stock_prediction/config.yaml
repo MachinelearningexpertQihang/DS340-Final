@@ -1,0 +1,47 @@
+# Configuration for Stock Price Prediction
+
+# Paths
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  model_dir: "models/saved"
+
+# Data configuration
+data:
+  filename: "stock_data.csv"
+  features: ["Open", "High", "Low", "Close", "Volume"]
+  seq_length: 60
+  train_test_split: 0.8
+  add_technical_indicators: true
+
+# Model configuration
+model:
+  type: "gru_transformer"  # Options: gru, transformer, gru_transformer
+  dropout: 0.2
+  
+  # GRU parameters
+  gru:
+    hidden_dim: 128
+    num_layers: 2
+  
+  # Transformer parameters
+  transformer:
+    d_model: 128
+    nhead: 8
+    num_layers: 2
+    dim_feedforward: 512
+
+# Training configuration
+training:
+  batch_size: 64
+  learning_rate: 0.001
+  num_epochs: 100
+  use_gpu: true
+  clip_grad_norm: true
+  max_grad_norm: 1.0
+  use_lr_scheduler: true
+  save_interval: 10
+
+# Evaluation configuration
+evaluation:
+  inverse_transform: true
