@@ -29,7 +29,7 @@ def train_model(config_path='config.yaml'):
     
     # Load processed data
     train_data_path = os.path.join(config['paths']['processed_data_dir'], 'train_data.pt')
-    train_data = torch.load(train_data_path)
+    train_data = torch.load(train_data_path, weights_only=False)  # 显式设置 weights_only=False
     X_train, y_train = train_data['X'], train_data['y']
     
     # Create dataset and dataloader

@@ -33,7 +33,7 @@ class BacktestStrategy:
         
         # Load test data
         test_data_path = os.path.join(self.config['paths']['processed_data_dir'], 'test_data.pt')
-        self.test_data = torch.load(test_data_path)
+        self.test_data = torch.load(test_data_path, weights_only=False)  # 添加 weights_only=False 参数
         self.X_test, self.y_test = self.test_data['X'], self.test_data['y']
         self.scaler = self.test_data['scaler']
         
@@ -48,7 +48,7 @@ class BacktestStrategy:
         # Load raw data for dates
         raw_data_path = os.path.join(self.config['paths']['raw_data_dir'], self.config['data']['filename'])
         self.raw_data = pd.read_csv(raw_data_path)
-        self.raw_data['Date'] = pd.to_datetime(self.raw_data['Date'])
+        self.raw_data['Date'] = pd.to_datetime(self.raw_data['Datetime'])  
         
         # Initialize model
         self._initialize_model(model_path)
@@ -225,7 +225,12 @@ class BacktestStrategy:
             'Date': dates,
             'Actual_Price': actual_prices,
             'Predicted_Price': predicted_prices,
-            'Signal': signals
+            'Signal': signals,
+            'Capital': 0.0,
+            'Shares': 0.0,  # 修改为浮点数类型
+            'Position': 0,
+            'Trade_PnL': 0.0,
+            'Trade': 0
         })
         
         # Initialize trading variables
@@ -238,10 +243,10 @@ class BacktestStrategy:
         
         # Add columns for tracking
         backtest_df['Capital'] = 0.0
-        backtest_df['Shares'] = 0
-        backtest_df['Position'] = 0
+        backtest_df['Shares'] = 0.0  # 修改为浮点数类型
+        backtest_df['Position'] = 0.0  # 修改为浮点数类型
         backtest_df['Trade_PnL'] = 0.0
-        backtest_df['Trade'] = 0
+        backtest_df['Trade'] = 0.0  # 修改为浮点数类型
         
         # Run simulation
         trade_count = 0

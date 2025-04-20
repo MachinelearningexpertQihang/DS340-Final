@@ -156,5 +156,5 @@ def load_model(model, path):
     Returns:
         torch.nn.Module: Loaded model
     """
-    model.load_state_dict(torch.load(path))
+    model.load_state_dict(torch.load(path, weights_only=False))
     return model

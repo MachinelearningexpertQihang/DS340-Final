@@ -30,7 +30,7 @@ def evaluate_model(config_path='config.yaml', model_path=None):
     
     # Load test data
     test_data_path = os.path.join(config['paths']['processed_data_dir'], 'test_data.pt')
-    test_data = torch.load(test_data_path)
+    test_data = torch.load(test_data_path, weights_only=False)
     X_test, y_test = test_data['X'], test_data['y']
     scaler = test_data['scaler']
     
@@ -153,7 +153,7 @@ def predict_future(config_path='config.yaml', model_path=None, days_ahead=30):
     
     # Load test data
     test_data_path = os.path.join(config['paths']['processed_data_dir'], 'test_data.pt')
-    test_data = torch.load(test_data_path)
+    test_data = torch.load(test_data_path, weights_only=False)
     X_test, y_test = test_data['X'], test_data['y']
     scaler = test_data['scaler']
     

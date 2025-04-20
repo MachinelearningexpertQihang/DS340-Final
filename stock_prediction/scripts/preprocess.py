@@ -22,16 +22,23 @@ def preprocess_data(config_path='config.yaml'):
     data_path = os.path.join(config['paths']['raw_data_dir'], config['data']['filename'])
     df = pd.read_csv(data_path)
     
-    # Convert date to datetime and set as index
-    df['Date'] = pd.to_datetime(df['Date'])
-    df.set_index('Date', inplace=True)
+    # Skip the second row which contains duplicate headers
+    if df.iloc[0].equals(pd.Series(['AAPL'] * len(df.columns))):
+        df = df.iloc[1:].reset_index(drop=True)
     
-    # Sort by date
-    df.sort_index(inplace=True)
+    # Convert Datetime column
+    df['Date'] = pd.to_datetime(df['Datetime'])
+    df.sort_values('Date', inplace=True)
     
-    # Select features
+    # Select features and ensure correct column names
     features = config['data']['features']
-    df = df[features]
+    df = df.rename(columns={'Datetime': 'Date'})
+    
+    # Convert all feature columns to numeric, removing any non-numeric characters
+    for col in features:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df = df[['Date'] + features]
     
     # Fill missing values
     df.fillna(method='ffill', inplace=True)
@@ -63,6 +70,9 @@ def preprocess_data(config_path='config.yaml'):
     
     # Drop rows with NaN values (due to rolling windows)
     df.dropna(inplace=True)
+    
+    # Drop Date column before scaling
+    df = df.drop('Date', axis=1)
     
     # Normalize data
     scaler = MinMaxScaler()

@@ -4,6 +4,7 @@ from scripts.preprocess import preprocess_data
 from scripts.train import train_model
 from scripts.evaluate import evaluate_model, predict_future
 from scripts.download_data import download_stock_data
+from scripts.backtest import run_backtest
 from scripts.utils import load_config
 
 def main():
@@ -13,12 +14,13 @@ def main():
     parser = argparse.ArgumentParser(description='Stock Price Prediction with GRU+Transformer')
     parser.add_argument('--config', type=str, default='config.yaml', help='Path to config file')
     parser.add_argument('--mode', type=str, default='all', 
-                        choices=['download', 'preprocess', 'train', 'evaluate', 'predict', 'all'], 
+                        choices=['download', 'preprocess', 'train', 'evaluate', 'predict', 'backtest', 'all'], 
                         help='Mode to run')
     parser.add_argument('--ticker', type=str, default='AAPL', help='Stock ticker symbol for download mode')
     parser.add_argument('--period', type=str, default='10y', help='Period to download (e.g., 1y, 5y, 10y, max)')
     parser.add_argument('--model_path', type=str, default=None, help='Path to model checkpoint for evaluation/prediction')
     parser.add_argument('--days_ahead', type=int, default=30, help='Number of days to predict ahead')
+    parser.add_argument('--optimize', action='store_true', help='Optimize trading parameters in backtest mode')
     
     args = parser.parse_args()
     
@@ -59,6 +61,10 @@ def main():
     if args.mode == 'predict' or args.mode == 'all':
         print(f"\n=== Predicting {args.days_ahead} Days Ahead ===")
         predict_future(args.config, args.model_path, args.days_ahead)
+    
+    if args.mode == 'backtest' or args.mode == 'all':
+        print("\n=== Running Backtest ===")
+        run_backtest(args.config, args.model_path, args.optimize)
     
     print("\n=== Process Completed ===")
 

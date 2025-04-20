@@ -1,0 +1,13 @@
+Open
+High
+Low
+Close
+Volume
+MA5
+MA20
+RSI
+MACD
+Signal_Line
+20d_std
+Upper_Band
+Lower_Band
