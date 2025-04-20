@@ -16,7 +16,7 @@ def main():
                         choices=['download', 'preprocess', 'train', 'evaluate', 'predict', 'all'], 
                         help='Mode to run')
     parser.add_argument('--ticker', type=str, default='AAPL', help='Stock ticker symbol for download mode')
-    parser.add_argument('--period', type=str, default='5y', help='Period to download (e.g., 1y, 5y, max)')
+    parser.add_argument('--period', type=str, default='10y', help='Period to download (e.g., 1y, 5y, 10y, max)')
     parser.add_argument('--model_path', type=str, default=None, help='Path to model checkpoint for evaluation/prediction')
     parser.add_argument('--days_ahead', type=int, default=30, help='Number of days to predict ahead')
     
