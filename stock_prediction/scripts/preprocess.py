@@ -74,18 +74,19 @@ def preprocess_data(config_path='config.yaml'):
     # Drop Date column before scaling
     df = df.drop('Date', axis=1)
     
-    # Normalize data
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df.values)
-    
     # Split data into train and test sets
-    train_size = int(len(scaled_data) * config['data']['train_test_split'])
-    train_data = scaled_data[:train_size]
-    test_data = scaled_data[train_size:]
+    train_size = int(len(df) * config['data']['train_test_split'])
+    train_data = df.iloc[:train_size]
+    test_data = df.iloc[train_size:]
+    
+    # Normalize data using MinMaxScaler (fit on train_data only)
+    scaler = MinMaxScaler()
+    train_scaled = scaler.fit_transform(train_data.values)
+    test_scaled = scaler.transform(test_data.values)
     
     # Create sequences
-    X_train, y_train = create_sequences(train_data, config['data']['seq_length'])
-    X_test, y_test = create_sequences(test_data, config['data']['seq_length'])
+    X_train, y_train = create_sequences(train_scaled, config['data']['seq_length'])
+    X_test, y_test = create_sequences(test_scaled, config['data']['seq_length'])
     
     # Save processed data
     train_data_path = os.path.join(config['paths']['processed_data_dir'], 'train_data.pt')
@@ -94,13 +95,13 @@ def preprocess_data(config_path='config.yaml'):
     torch.save({
         'X': torch.tensor(X_train, dtype=torch.float32),
         'y': torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1),
-        'scaler': scaler
+        'scaler': scaler  # Save the scaler for inverse transform
     }, train_data_path)
     
     torch.save({
         'X': torch.tensor(X_test, dtype=torch.float32),
         'y': torch.tensor(y_test, dtype=torch.float32).reshape(-1, 1),
-        'scaler': scaler
+        'scaler': scaler  # Save scaler for later use
     }, test_data_path)
     
     print(f"Processed data saved to {train_data_path} and {test_data_path}")

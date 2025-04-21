@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import argparse
 from tqdm import tqdm
+from sklearn.preprocessing import MinMaxScaler  # 确保导入 MinMaxScaler
 
 from models.gru import GRUModel
 from models.transformer import TransformerModel
@@ -31,9 +32,17 @@ class BacktestStrategy:
         self.device = torch.device('cuda' if torch.cuda.is_available() and self.config['training']['use_gpu'] else 'cpu')
         print(f"Using device: {self.device}")
         
+        # 添加 MinMaxScaler 到安全全局对象
+        torch.serialization.add_safe_globals([MinMaxScaler])
+
         # Load test data
         test_data_path = os.path.join(self.config['paths']['processed_data_dir'], 'test_data.pt')
-        self.test_data = torch.load(test_data_path, weights_only=False)  # 添加 weights_only=False 参数
+        self.test_data = torch.load(test_data_path, weights_only=False)
+        
+        # Ensure scaler exists in test_data
+        if 'scaler' not in self.test_data:
+            raise KeyError("The 'scaler' key is missing in the test_data.pt file. Ensure it is saved during preprocessing.")
+        
         self.X_test, self.y_test = self.test_data['X'], self.test_data['y']
         self.scaler = self.test_data['scaler']
         
@@ -69,7 +78,7 @@ class BacktestStrategy:
         """
         model_type = self.config['model']['type']
         
-        if model_type == 'gru':
+        if (model_type == 'gru'):
             self.model = GRUModel(
                 input_dim=self.input_dim,
                 hidden_dim=self.config['model']['gru']['hidden_dim'],
@@ -77,7 +86,7 @@ class BacktestStrategy:
                 output_dim=self.output_dim,
                 dropout=self.config['model']['dropout']
             )
-        elif model_type == 'transformer':
+        elif (model_type == 'transformer'):
             self.model = TransformerModel(
                 input_dim=self.input_dim,
                 d_model=self.config['model']['transformer']['d_model'],
@@ -88,7 +97,7 @@ class BacktestStrategy:
                 dropout=self.config['model']['dropout'],
                 max_len=self.config['data']['seq_length']
             )
-        elif model_type == 'gru_transformer':
+        elif (model_type == 'gru_transformer'):
             self.model = GRUTransformerModel(
                 input_dim=self.input_dim,
                 gru_hidden_dim=self.config['model']['gru']['hidden_dim'],
@@ -144,7 +153,7 @@ class BacktestStrategy:
         train_size = int(len(self.raw_data) * self.config['data']['train_test_split'])
         start_idx = train_size + seq_length
         
-        # Get the dates
+        # Ensure dates are strictly sequential
         dates = self.raw_data['Date'].iloc[start_idx:start_idx + len(self.y_test)].reset_index(drop=True)
         
         return dates
@@ -358,11 +367,6 @@ class BacktestStrategy:
         buy_hold_volatility = buy_hold_returns.std() * np.sqrt(252)
         
         # Sharpe ratio (assuming risk-free rate of 0)
-        sharpe_ratio = ann_return / volatility if volatility != 0 else 0
-        buy_hold_sharpe = ann_buy_hold_return / buy_hold_volatility if buy_hold_volatility != 0 else 0
-        
-        # Maximum drawdown
-        cumulative = (1 + returns).cumprod()
         running_max = cumulative.cummax()
         drawdown = (cumulative / running_max - 1)
         max_drawdown = drawdown.min()

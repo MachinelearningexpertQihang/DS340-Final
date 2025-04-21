@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.preprocessing import MinMaxScaler  
 
 from models.gru import GRUModel
 from models.transformer import TransformerModel
@@ -32,7 +33,14 @@ def evaluate_model(config_path='config.yaml', model_path=None):
     test_data_path = os.path.join(config['paths']['processed_data_dir'], 'test_data.pt')
     test_data = torch.load(test_data_path, weights_only=False)
     X_test, y_test = test_data['X'], test_data['y']
-    scaler = test_data['scaler']
+    
+    # 添加 MinMaxScaler 到安全全局对象
+    torch.serialization.add_safe_globals([MinMaxScaler])
+
+    # Load scaler from training data
+    train_data_path = os.path.join(config['paths']['processed_data_dir'], 'train_data.pt')
+    train_data = torch.load(train_data_path, weights_only=False)  # 确保 weights_only=False
+    scaler = train_data['scaler']
     
     # Move data to device
     X_test = X_test.to(device)
