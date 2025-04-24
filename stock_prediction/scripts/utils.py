@@ -87,50 +87,132 @@ def prepare_dataloaders(X_train, y_train, X_test, y_test, batch_size):
 
 def calculate_metrics(y_true, y_pred):
     """
-    Calculate evaluation metrics
+    Calculate evaluation metrics for volatility prediction
     
     Args:
-        y_true (numpy.ndarray): True values
-        y_pred (numpy.ndarray): Predicted values
+        y_true (numpy.ndarray): True volatility values
+        y_pred (numpy.ndarray): Predicted volatility values
         
     Returns:
         dict: Dictionary of metrics
     """
     from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
     
+    # Basic metrics
     mse = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
     
+    # Volatility-specific metrics
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100  # Mean Absolute Percentage Error
+    
+    # Directional Accuracy (for volatility trend)
+    vol_direction_true = np.diff(y_true) > 0
+    vol_direction_pred = np.diff(y_pred) > 0
+    directional_accuracy = np.mean(vol_direction_true == vol_direction_pred) * 100
+    
+    # QLIKE loss (commonly used in volatility forecasting)
+    qlike = np.mean(y_true/y_pred - np.log(y_true/y_pred) - 1)
+    
     return {
         'MSE': mse,
         'RMSE': rmse,
         'MAE': mae,
-        'R2': r2
+        'R2': r2,
+        'MAPE (%)': mape,
+        'Directional Accuracy (%)': directional_accuracy,
+        'QLIKE': qlike
     }
 
-def plot_predictions(y_true, y_pred, title='Stock Price Prediction'):
+def plot_predictions(y_true, y_pred, title='Volatility Prediction'):
     """
-    Plot true vs predicted values
+    Plot true vs predicted volatility values
     
     Args:
-        y_true (numpy.ndarray): True values
-        y_pred (numpy.ndarray): Predicted values
+        y_true (numpy.ndarray): True volatility values
+        y_pred (numpy.ndarray): Predicted volatility values
         title (str): Plot title
     """
-    plt.figure(figsize=(12, 6))
-    plt.plot(y_true, label='Actual')
-    plt.plot(y_pred, label='Predicted')
-    plt.title(title)
-    plt.xlabel('Time')
-    plt.ylabel('Stock Price')
-    plt.legend()
-    plt.grid(True)
+    plt.figure(figsize=(12, 8))
+    
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Plot 1: Actual vs Predicted Volatility
+    ax1.plot(y_true, label='Actual Volatility', color='blue', alpha=0.7)
+    ax1.plot(y_pred, label='Predicted Volatility', color='red', alpha=0.7)
+    ax1.set_title('Actual vs Predicted Volatility')
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Volatility (%)')
+    ax1.legend()
+    ax1.grid(True)
+    
+    # Plot 2: Prediction Error
+    error = y_true - y_pred
+    ax2.plot(error, label='Prediction Error', color='green', alpha=0.7)
+    ax2.axhline(y=0, color='black', linestyle='--', alpha=0.3)
+    ax2.set_title('Prediction Error')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Error')
+    ax2.legend()
+    ax2.grid(True)
+    
+    plt.tight_layout()
     
     # Save the plot
     os.makedirs('results', exist_ok=True)
     plt.savefig(f'results/{title.replace(" ", "_").lower()}.png')
+    plt.close()
+
+def plot_backtest_results(backtest_df):
+    """
+    Plot backtest results for volatility trading
+    
+    Args:
+        backtest_df (pd.DataFrame): Dataframe with backtest results
+    """
+    # Create figure with multiple subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 15))
+    
+    # Plot 1: Strategy Cumulative Returns
+    cum_returns = (1 + backtest_df['Strategy Returns']).cumprod()
+    cum_market = (1 + backtest_df['Market Returns']).cumprod()
+    
+    ax1.plot(cum_returns, label='Strategy Returns', color='blue')
+    ax1.plot(cum_market, label='Market Returns', color='gray', alpha=0.7)
+    ax1.set_title('Cumulative Returns')
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Cumulative Return')
+    ax1.legend()
+    ax1.grid(True)
+    
+    # Plot 2: Predicted Volatility and Position Sizes
+    ax2.plot(backtest_df['Predicted Volatility'], label='Predicted Volatility', color='red')
+    ax2.set_title('Predicted Volatility')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Volatility')
+    ax2_twin = ax2.twinx()
+    ax2_twin.plot(backtest_df['Position'], label='Position Size', color='green', alpha=0.5)
+    ax2_twin.set_ylabel('Position Size')
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_twin.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2)
+    ax2.grid(True)
+    
+    # Plot 3: Drawdown Analysis
+    cum_returns = (1 + backtest_df['Strategy Returns']).cumprod()
+    rolling_max = cum_returns.expanding().max()
+    drawdowns = (cum_returns - rolling_max) / rolling_max
+    
+    ax3.fill_between(range(len(drawdowns)), drawdowns, 0, color='red', alpha=0.3)
+    ax3.set_title('Strategy Drawdown')
+    ax3.set_xlabel('Time')
+    ax3.set_ylabel('Drawdown')
+    ax3.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('results/backtest_analysis.png')
     plt.close()
 
 def save_model(model, path):

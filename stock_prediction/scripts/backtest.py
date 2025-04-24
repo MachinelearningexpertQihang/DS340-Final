@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import argparse
 from tqdm import tqdm
-from sklearn.preprocessing import MinMaxScaler  # 确保导入 MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
+import numpy._core.multiarray as ma
 
 from models.gru import GRUModel
 from models.transformer import TransformerModel
@@ -15,34 +16,23 @@ from scripts.utils import load_config, load_model, plot_predictions
 
 class BacktestStrategy:
     """
-    Backtesting strategy for stock prediction model
+    Backtesting strategy for volatility prediction and trading
     """
     def __init__(self, config_path='config.yaml', model_path=None):
-        """
-        Initialize backtesting strategy
-        
-        Args:
-            config_path (str): Path to config file
-            model_path (str, optional): Path to model checkpoint. If None, use the best model.
-        """
-        # Load configuration
         self.config = load_config(config_path)
-        
-        # Set device
         self.device = torch.device('cuda' if torch.cuda.is_available() and self.config['training']['use_gpu'] else 'cpu')
         print(f"Using device: {self.device}")
         
-        # 添加 MinMaxScaler 到安全全局对象
-        torch.serialization.add_safe_globals([MinMaxScaler])
-
+        # 添加所需的安全全局对象
+        torch.serialization.add_safe_globals([MinMaxScaler, ma._reconstruct])
+        
         # Load test data
         test_data_path = os.path.join(self.config['paths']['processed_data_dir'], 'test_data.pt')
         self.test_data = torch.load(test_data_path, weights_only=False)
         
-        # Ensure scaler exists in test_data
         if 'scaler' not in self.test_data:
-            raise KeyError("The 'scaler' key is missing in the test_data.pt file. Ensure it is saved during preprocessing.")
-        
+            raise KeyError("The 'scaler' key is missing in the test_data.pt file")
+            
         self.X_test, self.y_test = self.test_data['X'], self.test_data['y']
         self.scaler = self.test_data['scaler']
         
@@ -50,35 +40,25 @@ class BacktestStrategy:
         self.X_test = self.X_test.to(self.device)
         self.y_test = self.y_test.to(self.device)
         
-        # Get input dimensions
-        self.input_dim = self.X_test.shape[2]  # Number of features
-        self.output_dim = self.y_test.shape[1]  # Number of output dimensions
+        self.input_dim = self.X_test.shape[2]
+        self.output_dim = self.y_test.shape[1]
         
-        # Load raw data for dates
         raw_data_path = os.path.join(self.config['paths']['raw_data_dir'], self.config['data']['filename'])
         self.raw_data = pd.read_csv(raw_data_path)
-        self.raw_data['Date'] = pd.to_datetime(self.raw_data['Datetime'])  
+        self.raw_data['Date'] = pd.to_datetime(self.raw_data['Datetime'])
         
-        # Initialize model
         self._initialize_model(model_path)
         
-        # Trading parameters (can be set via set_parameters method)
-        self.initial_capital = 10000.0
-        self.position_size = 1.0  # Fraction of capital to use per trade
-        self.stop_loss = 0.05     # 5% stop loss
-        self.take_profit = 0.10   # 10% take profit
-        self.commission = 0.001   # 0.1% commission per trade
+        # Strategy parameters
+        self.max_position = 1.0
+        self.high_vol_threshold = 0.3  # High volatility threshold
+        self.low_vol_threshold = 0.1   # Low volatility threshold
         
     def _initialize_model(self, model_path=None):
-        """
-        Initialize the model based on configuration
-        
-        Args:
-            model_path (str, optional): Path to model checkpoint. If None, use the best model.
-        """
+        """Initialize the model based on configuration"""
         model_type = self.config['model']['type']
         
-        if (model_type == 'gru'):
+        if model_type == 'gru':
             self.model = GRUModel(
                 input_dim=self.input_dim,
                 hidden_dim=self.config['model']['gru']['hidden_dim'],
@@ -86,7 +66,7 @@ class BacktestStrategy:
                 output_dim=self.output_dim,
                 dropout=self.config['model']['dropout']
             )
-        elif (model_type == 'transformer'):
+        elif model_type == 'transformer':
             self.model = TransformerModel(
                 input_dim=self.input_dim,
                 d_model=self.config['model']['transformer']['d_model'],
@@ -97,7 +77,7 @@ class BacktestStrategy:
                 dropout=self.config['model']['dropout'],
                 max_len=self.config['data']['seq_length']
             )
-        elif (model_type == 'gru_transformer'):
+        elif model_type == 'gru_transformer':
             self.model = GRUTransformerModel(
                 input_dim=self.input_dim,
                 gru_hidden_dim=self.config['model']['gru']['hidden_dim'],
@@ -112,573 +92,314 @@ class BacktestStrategy:
             )
         else:
             raise ValueError(f"Unknown model type: {model_type}")
-        
+            
         # Load model weights
         if model_path is None:
             model_path = os.path.join(self.config['paths']['model_dir'], 'best_model.pth')
-        
+        self.model_path = model_path
+            
         self.model = load_model(self.model, model_path)
         self.model = self.model.to(self.device)
         self.model.eval()
-    
-    def set_parameters(self, initial_capital=10000.0, position_size=1.0, 
-                      stop_loss=0.05, take_profit=0.10, commission=0.001):
+        
+    def _generate_signals(self, prices, predicted_volatility):
         """
-        Set trading parameters
+        Generate trading signals based on predicted volatility
         
-        Args:
-            initial_capital (float): Initial capital
-            position_size (float): Fraction of capital to use per trade (0.0-1.0)
-            stop_loss (float): Stop loss percentage (0.0-1.0)
-            take_profit (float): Take profit percentage (0.0-1.0)
-            commission (float): Commission percentage per trade (0.0-1.0)
+        Strategy logic:
+        - Reduce position size when predicted volatility is high
+        - Increase position size when predicted volatility is low
+        - Consider volatility trend for position direction
         """
-        self.initial_capital = initial_capital
-        self.position_size = max(0.0, min(1.0, position_size))  # Ensure between 0 and 1
-        self.stop_loss = max(0.0, stop_loss)
-        self.take_profit = max(0.0, take_profit)
-        self.commission = max(0.0, commission)
-    
-    def _get_prediction_dates(self):
-        """
-        Get dates for the test predictions
+        signals = np.zeros(len(predicted_volatility))
+        position_sizes = np.ones(len(predicted_volatility))
         
-        Returns:
-            list: List of dates corresponding to test predictions
-        """
-        # Get the sequence length
-        seq_length = self.config['data']['seq_length']
-        
-        # Calculate the start index in the raw data
-        train_size = int(len(self.raw_data) * self.config['data']['train_test_split'])
-        start_idx = train_size + seq_length
-        
-        # Ensure dates are strictly sequential
-        dates = self.raw_data['Date'].iloc[start_idx:start_idx + len(self.y_test)].reset_index(drop=True)
-        
-        return dates
-    
-    def _get_predictions(self):
-        """
-        Get model predictions on test data
-        
-        Returns:
-            tuple: (actual_prices, predicted_prices, dates)
-        """
-        with torch.no_grad():
-            y_pred = self.model(self.X_test)
-        
-        # Move tensors to CPU for evaluation
-        y_test_cpu = self.y_test.cpu().numpy()
-        y_pred_cpu = y_pred.cpu().numpy()
-        
-        # Inverse transform predictions if needed
-        if self.config['evaluation']['inverse_transform']:
-            # Create dummy arrays with the same shape as the original data
-            y_test_dummy = np.zeros((len(y_test_cpu), self.scaler.n_features_in_))
-            y_pred_dummy = np.zeros((len(y_pred_cpu), self.scaler.n_features_in_))
+        for i in range(1, len(predicted_volatility)):
+            # Calculate volatility trend
+            vol_trend = predicted_volatility[i] - predicted_volatility[i-1]
             
-            # Put the predicted values in the first column (assuming Close price is the target)
-            y_test_dummy[:, 0] = y_test_cpu.flatten()
-            y_pred_dummy[:, 0] = y_pred_cpu.flatten()
+            # Adjust position size based on volatility level
+            if predicted_volatility[i] > self.high_vol_threshold:
+                position_sizes[i] = self.max_position * 0.5  # Reduce position in high volatility
+            elif predicted_volatility[i] < self.low_vol_threshold:
+                position_sizes[i] = self.max_position  # Full position in low volatility
+            else:
+                # Linear scaling between thresholds
+                vol_range = self.high_vol_threshold - self.low_vol_threshold
+                scale = (self.high_vol_threshold - predicted_volatility[i]) / vol_range
+                position_sizes[i] = self.max_position * (0.5 + 0.5 * scale)
             
-            # Inverse transform
-            y_test_inv = self.scaler.inverse_transform(y_test_dummy)[:, 0]
-            y_pred_inv = self.scaler.inverse_transform(y_pred_dummy)[:, 0]
-        else:
-            y_test_inv = y_test_cpu.flatten()
-            y_pred_inv = y_pred_cpu.flatten()
-        
-        # Get dates
-        dates = self._get_prediction_dates()
-        
-        return y_test_inv, y_pred_inv, dates
-    
-    def _generate_signals(self, actual_prices, predicted_prices):
-        """
-        Generate trading signals based on predictions
-        
-        Args:
-            actual_prices (numpy.ndarray): Actual prices
-            predicted_prices (numpy.ndarray): Predicted prices
-            
-        Returns:
-            pandas.DataFrame: DataFrame with signals
-        """
-        # Calculate price change percentage for next day
-        price_change_pct = np.zeros_like(predicted_prices)
-        price_change_pct[:-1] = (predicted_prices[1:] - actual_prices[:-1]) / actual_prices[:-1]
-        
-        # Generate signals: 1 for buy, -1 for sell, 0 for hold
-        signals = np.zeros_like(price_change_pct)
-        signals[price_change_pct > 0.01] = 1    # Buy if predicted increase > 1%
-        signals[price_change_pct < -0.01] = -1  # Sell if predicted decrease > 1%
+            # Determine position direction based on volatility trend
+            if vol_trend > 0:
+                signals[i] = 1  # Long when volatility is increasing
+            else:
+                signals[i] = -1  # Short when volatility is decreasing
+                
+            # Apply position sizing
+            signals[i] *= position_sizes[i]
         
         return signals
     
-    def run_backtest(self):
-        """
-        Run backtest simulation
-        
-        Returns:
-            pandas.DataFrame: DataFrame with backtest results
-        """
-        # Get predictions and dates
-        actual_prices, predicted_prices, dates = self._get_predictions()
-        
-        # Generate signals
-        signals = self._generate_signals(actual_prices, predicted_prices)
-        
-        # Create DataFrame for backtest results
-        backtest_df = pd.DataFrame({
-            'Date': dates,
-            'Actual_Price': actual_prices,
-            'Predicted_Price': predicted_prices,
-            'Signal': signals,
-            'Capital': 0.0,
-            'Shares': 0.0,  # 修改为浮点数类型
-            'Position': 0,
-            'Trade_PnL': 0.0,
-            'Trade': 0
-        })
-        
-        # Initialize trading variables
-        capital = self.initial_capital
-        shares = 0
-        entry_price = 0
-        position_type = 0  # 0: no position, 1: long, -1: short
-        stop_loss_price = 0
-        take_profit_price = 0
-        
-        # Add columns for tracking
-        backtest_df['Capital'] = 0.0
-        backtest_df['Shares'] = 0.0  # 修改为浮点数类型
-        backtest_df['Position'] = 0.0  # 修改为浮点数类型
-        backtest_df['Trade_PnL'] = 0.0
-        backtest_df['Trade'] = 0.0  # 修改为浮点数类型
-        
-        # Run simulation
-        trade_count = 0
-        
-        for i in range(len(backtest_df)):
-            current_price = backtest_df.loc[i, 'Actual_Price']
-            current_signal = backtest_df.loc[i, 'Signal']
-            
-            # Check if we need to close position due to stop loss or take profit
-            if position_type != 0:
-                # For long positions
-                if position_type == 1:
-                    if current_price <= stop_loss_price or current_price >= take_profit_price:
-                        # Close long position
-                        trade_pnl = shares * (current_price * (1 - self.commission) - entry_price)
-                        capital += shares * current_price * (1 - self.commission)
-                        backtest_df.loc[i, 'Trade_PnL'] = trade_pnl
-                        backtest_df.loc[i, 'Trade'] = -1  # Close position
-                        shares = 0
-                        position_type = 0
-                
-                # For short positions (if implemented)
-                elif position_type == -1:
-                    if current_price >= stop_loss_price or current_price <= take_profit_price:
-                        # Close short position (simplified)
-                        trade_pnl = shares * (entry_price - current_price * (1 + self.commission))
-                        capital += shares * entry_price + trade_pnl
-                        backtest_df.loc[i, 'Trade_PnL'] = trade_pnl
-                        backtest_df.loc[i, 'Trade'] = 1  # Close position
-                        shares = 0
-                        position_type = 0
-            
-            # Check for new signals if we don't have an open position
-            if position_type == 0:
-                if current_signal == 1:  # Buy signal
-                    # Open long position
-                    position_size_amount = capital * self.position_size
-                    shares = position_size_amount / (current_price * (1 + self.commission))
-                    entry_price = current_price * (1 + self.commission)
-                    capital -= position_size_amount
-                    position_type = 1
-                    stop_loss_price = entry_price * (1 - self.stop_loss)
-                    take_profit_price = entry_price * (1 + self.take_profit)
-                    trade_count += 1
-                    backtest_df.loc[i, 'Trade'] = 1  # Open position
-                
-                elif current_signal == -1 and False:  # Sell signal (short selling disabled by default)
-                    # Open short position (simplified)
-                    position_size_amount = capital * self.position_size
-                    shares = position_size_amount / current_price
-                    entry_price = current_price
-                    position_type = -1
-                    stop_loss_price = entry_price * (1 + self.stop_loss)
-                    take_profit_price = entry_price * (1 - self.take_profit)
-                    trade_count += 1
-                    backtest_df.loc[i, 'Trade'] = -1  # Open position
-            
-            # Update tracking columns
-            backtest_df.loc[i, 'Capital'] = capital
-            backtest_df.loc[i, 'Shares'] = shares
-            backtest_df.loc[i, 'Position'] = position_type
-            
-            # Calculate portfolio value
-            portfolio_value = capital
-            if shares > 0:
-                portfolio_value += shares * current_price
-            
-            backtest_df.loc[i, 'Portfolio_Value'] = portfolio_value
-        
-        # Calculate returns
-        backtest_df['Daily_Return'] = backtest_df['Portfolio_Value'].pct_change()
-        
-        # Calculate cumulative returns
-        backtest_df['Cumulative_Return'] = (1 + backtest_df['Daily_Return']).cumprod() - 1
-        
-        # Calculate buy and hold returns
-        backtest_df['Buy_Hold_Value'] = self.initial_capital * (backtest_df['Actual_Price'] / backtest_df['Actual_Price'].iloc[0])
-        backtest_df['Buy_Hold_Return'] = backtest_df['Buy_Hold_Value'].pct_change()
-        backtest_df['Buy_Hold_Cumulative'] = (1 + backtest_df['Buy_Hold_Return']).cumprod() - 1
-        
-        return backtest_df
-    
     def calculate_performance_metrics(self, backtest_df):
         """
-        Calculate performance metrics from backtest results
-        
-        Args:
-            backtest_df (pandas.DataFrame): DataFrame with backtest results
-            
-        Returns:
-            dict: Dictionary of performance metrics
+        Calculate performance metrics for volatility trading strategy
         """
-        # Filter out NaN values
-        returns = backtest_df['Daily_Return'].dropna()
-        buy_hold_returns = backtest_df['Buy_Hold_Return'].dropna()
+        returns = backtest_df['Strategy Returns']
         
-        # Calculate metrics
-        total_return = backtest_df['Portfolio_Value'].iloc[-1] / self.initial_capital - 1
-        buy_hold_return = backtest_df['Buy_Hold_Value'].iloc[-1] / self.initial_capital - 1
-        
-        # Annualized return (assuming 252 trading days per year)
-        n_days = len(returns)
-        ann_factor = 252 / n_days
-        ann_return = (1 + total_return) ** ann_factor - 1
-        ann_buy_hold_return = (1 + buy_hold_return) ** ann_factor - 1
-        
-        # Volatility
+        # Standard metrics
+        total_return = (1 + returns).prod() - 1
+        annual_return = (1 + total_return) ** (252 / len(returns)) - 1
         volatility = returns.std() * np.sqrt(252)
-        buy_hold_volatility = buy_hold_returns.std() * np.sqrt(252)
+        sharpe_ratio = (annual_return - 0.02) / volatility  # Assuming 2% risk-free rate
         
-        # Sharpe ratio (assuming risk-free rate of 0)
-        running_max = cumulative.cummax()
-        drawdown = (cumulative / running_max - 1)
-        max_drawdown = drawdown.min()
+        # Drawdown analysis
+        cum_returns = (1 + returns).cumprod()
+        rolling_max = cum_returns.expanding().max()
+        drawdowns = (cum_returns - rolling_max) / rolling_max
+        max_drawdown = drawdowns.min()
         
-        buy_hold_cumulative = (1 + buy_hold_returns).cumprod()
-        buy_hold_running_max = buy_hold_cumulative.cummax()
-        buy_hold_drawdown = (buy_hold_cumulative / buy_hold_running_max - 1)
-        buy_hold_max_drawdown = buy_hold_drawdown.min()
+        # Volatility-specific metrics
+        vol_prediction_accuracy = backtest_df['Directional Accuracy'].mean()
+        avg_position_size = np.abs(backtest_df['Position']).mean()
         
-        # Win rate
-        trades = backtest_df[backtest_df['Trade_PnL'] != 0]
-        if len(trades) > 0:
-            win_rate = len(trades[trades['Trade_PnL'] > 0]) / len(trades)
-            avg_win = trades[trades['Trade_PnL'] > 0]['Trade_PnL'].mean() if len(trades[trades['Trade_PnL'] > 0]) > 0 else 0
-            avg_loss = trades[trades['Trade_PnL'] < 0]['Trade_PnL'].mean() if len(trades[trades['Trade_PnL'] < 0]) > 0 else 0
-            profit_factor = abs(trades[trades['Trade_PnL'] > 0]['Trade_PnL'].sum() / trades[trades['Trade_PnL'] < 0]['Trade_PnL'].sum()) if trades[trades['Trade_PnL'] < 0]['Trade_PnL'].sum() != 0 else float('inf')
-        else:
-            win_rate = 0
-            avg_win = 0
-            avg_loss = 0
-            profit_factor = 0
+        # Trading metrics
+        trades = backtest_df['Position'].diff() != 0
+        num_trades = trades.sum()
+        winning_trades = returns[trades] > 0
+        win_rate = winning_trades.mean() if num_trades > 0 else 0
         
-        # Number of trades
-        num_trades = len(trades)
-        
-        metrics = {
+        return {
             'Total Return': total_return,
-            'Buy & Hold Return': buy_hold_return,
-            'Annualized Return': ann_return,
-            'Buy & Hold Ann. Return': ann_buy_hold_return,
+            'Annual Return': annual_return,
             'Volatility': volatility,
-            'Buy & Hold Volatility': buy_hold_volatility,
             'Sharpe Ratio': sharpe_ratio,
-            'Buy & Hold Sharpe': buy_hold_sharpe,
             'Max Drawdown': max_drawdown,
-            'Buy & Hold Max Drawdown': buy_hold_max_drawdown,
+            'Number of Trades': num_trades,
             'Win Rate': win_rate,
-            'Average Win': avg_win,
-            'Average Loss': avg_loss,
-            'Profit Factor': profit_factor,
-            'Number of Trades': num_trades
+            'Volatility Prediction Accuracy': vol_prediction_accuracy,
+            'Average Position Size': avg_position_size
         }
-        
-        return metrics
     
-    def plot_results(self, backtest_df, metrics):
+    def run(self):
         """
-        Plot backtest results
-        
-        Args:
-            backtest_df (pandas.DataFrame): DataFrame with backtest results
-            metrics (dict): Dictionary of performance metrics
-        """
-        # Create results directory if it doesn't exist
-        os.makedirs('results', exist_ok=True)
-        
-        # Plot portfolio value vs buy & hold
-        plt.figure(figsize=(14, 7))
-        plt.plot(backtest_df['Date'], backtest_df['Portfolio_Value'], label='Strategy')
-        plt.plot(backtest_df['Date'], backtest_df['Buy_Hold_Value'], label='Buy & Hold')
-        plt.title('Portfolio Value vs Buy & Hold')
-        plt.xlabel('Date')
-        plt.ylabel('Value ($)')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig('results/backtest_portfolio_value.png')
-        plt.close()
-        
-        # Plot cumulative returns
-        plt.figure(figsize=(14, 7))
-        plt.plot(backtest_df['Date'], backtest_df['Cumulative_Return'], label='Strategy')
-        plt.plot(backtest_df['Date'], backtest_df['Buy_Hold_Cumulative'], label='Buy & Hold')
-        plt.title('Cumulative Returns')
-        plt.xlabel('Date')
-        plt.ylabel('Cumulative Return')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig('results/backtest_cumulative_returns.png')
-        plt.close()
-        
-        # Plot drawdown
-        returns = backtest_df['Daily_Return'].dropna()
-        buy_hold_returns = backtest_df['Buy_Hold_Return'].dropna()
-        
-        cumulative = (1 + returns).cumprod()
-        running_max = cumulative.cummax()
-        drawdown = (cumulative / running_max - 1)
-        
-        buy_hold_cumulative = (1 + buy_hold_returns).cumprod()
-        buy_hold_running_max = buy_hold_cumulative.cummax()
-        buy_hold_drawdown = (buy_hold_cumulative / buy_hold_running_max - 1)
-        
-        plt.figure(figsize=(14, 7))
-        plt.plot(backtest_df['Date'].iloc[1:], drawdown.values, label='Strategy')
-        plt.plot(backtest_df['Date'].iloc[1:], buy_hold_drawdown.values, label='Buy & Hold')
-        plt.title('Drawdown')
-        plt.xlabel('Date')
-        plt.ylabel('Drawdown')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig('results/backtest_drawdown.png')
-        plt.close()
-        
-        # Plot trades
-        trades = backtest_df[backtest_df['Trade'] != 0]
-        if len(trades) > 0:
-            plt.figure(figsize=(14, 7))
-            plt.plot(backtest_df['Date'], backtest_df['Actual_Price'])
-            
-            # Plot buy signals
-            buys = trades[trades['Trade'] == 1]
-            plt.scatter(buys['Date'], buys['Actual_Price'], color='green', marker='^', s=100, label='Buy')
-            
-            # Plot sell signals
-            sells = trades[trades['Trade'] == -1]
-            plt.scatter(sells['Date'], sells['Actual_Price'], color='red', marker='v', s=100, label='Sell')
-            
-            plt.title('Trading Signals')
-            plt.xlabel('Date')
-            plt.ylabel('Price')
-            plt.legend()
-            plt.grid(True)
-            plt.savefig('results/backtest_trades.png')
-            plt.close()
-        
-        # Create a summary table
-        plt.figure(figsize=(10, 8))
-        plt.axis('off')
-        
-        # Create table data
-        table_data = []
-        for key, value in metrics.items():
-            if isinstance(value, float):
-                if 'Return' in key or 'Drawdown' in key or 'Rate' in key:
-                    formatted_value = f"{value:.2%}"
-                else:
-                    formatted_value = f"{value:.4f}"
-            else:
-                formatted_value = str(value)
-            table_data.append([key, formatted_value])
-        
-        # Create table
-        table = plt.table(
-            cellText=table_data,
-            colLabels=['Metric', 'Value'],
-            cellLoc='center',
-            loc='center',
-            bbox=[0.2, 0.0, 0.6, 1.0]
-        )
-        
-        # Style table
-        table.auto_set_font_size(False)
-        table.set_fontsize(12)
-        table.scale(1.2, 1.5)
-        
-        plt.title('Backtest Performance Metrics', fontsize=16, pad=20)
-        plt.savefig('results/backtest_metrics.png', bbox_inches='tight')
-        plt.close()
-        
-        # Save results to CSV
-        backtest_df.to_csv('results/backtest_results.csv', index=False)
-        
-        # Save metrics to CSV
-        pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value']).to_csv('results/backtest_metrics.csv', index=False)
-    
-    def optimize_parameters(self, position_sizes=None, stop_losses=None, take_profits=None):
-        """
-        Optimize trading parameters
-        
-        Args:
-            position_sizes (list, optional): List of position sizes to test
-            stop_losses (list, optional): List of stop loss percentages to test
-            take_profits (list, optional): List of take profit percentages to test
-            
-        Returns:
-            tuple: (best_params, optimization_results)
-        """
-        if position_sizes is None:
-            position_sizes = [0.25, 0.5, 0.75, 1.0]
-        
-        if stop_losses is None:
-            stop_losses = [0.02, 0.05, 0.1]
-        
-        if take_profits is None:
-            take_profits = [0.03, 0.05, 0.1, 0.15]
-        
-        results = []
-        
-        # Store original parameters
-        orig_position_size = self.position_size
-        orig_stop_loss = self.stop_loss
-        orig_take_profit = self.take_profit
-        
-        total_combinations = len(position_sizes) * len(stop_losses) * len(take_profits)
-        progress_bar = tqdm(total=total_combinations, desc="Optimizing Parameters")
-        
-        for ps in position_sizes:
-            for sl in stop_losses:
-                for tp in take_profits:
-                    # Set parameters
-                    self.set_parameters(position_size=ps, stop_loss=sl, take_profit=tp)
-                    
-                    # Run backtest
-                    backtest_df = self.run_backtest()
-                    metrics = self.calculate_performance_metrics(backtest_df)
-                    
-                    # Store results
-                    results.append({
-                        'Position_Size': ps,
-                        'Stop_Loss': sl,
-                        'Take_Profit': tp,
-                        'Total_Return': metrics['Total Return'],
-                        'Sharpe_Ratio': metrics['Sharpe Ratio'],
-                        'Max_Drawdown': metrics['Max Drawdown'],
-                        'Win_Rate': metrics['Win Rate'],
-                        'Profit_Factor': metrics['Profit Factor'],
-                        'Num_Trades': metrics['Number of Trades']
-                    })
-                    
-                    progress_bar.update(1)
-        
-        progress_bar.close()
-        
-        # Restore original parameters
-        self.set_parameters(position_size=orig_position_size, stop_loss=orig_stop_loss, take_profit=orig_take_profit)
-        
-        # Convert results to DataFrame
-        results_df = pd.DataFrame(results)
-        
-        # Find best parameters based on Sharpe ratio
-        best_sharpe_idx = results_df['Sharpe_Ratio'].idxmax()
-        best_params = results_df.iloc[best_sharpe_idx][['Position_Size', 'Stop_Loss', 'Take_Profit']].to_dict()
-        
-        # Save optimization results
-        results_df.to_csv('results/parameter_optimization.csv', index=False)
-        
-        return best_params, results_df
-    
-    def run_with_optimal_parameters(self):
-        """
-        Run backtest with optimal parameters
+        Run the backtesting strategy
         
         Returns:
-            pandas.DataFrame: DataFrame with backtest results
+            tuple: (backtest_df, metrics) containing the backtest results and performance metrics
         """
-        # Run parameter optimization
-        best_params, _ = self.optimize_parameters()
+        # 确保使用正确的数据加载方式
+        torch.serialization.add_safe_globals([MinMaxScaler, ma._reconstruct])
+        X_test, y_test = self.X_test.cpu().numpy(), self.y_test.cpu().numpy()
         
-        # Set optimal parameters
-        self.set_parameters(
-            position_size=best_params['Position_Size'],
-            stop_loss=best_params['Stop_Loss'],
-            take_profit=best_params['Take_Profit']
-        )
+        # 获取日期范围
+        train_size = int(len(self.raw_data) * self.config['data']['train_test_split'])
+        seq_length = self.config['data']['seq_length']
+        test_dates = self.raw_data['Date'].iloc[train_size + seq_length:train_size + seq_length + len(y_test)].reset_index(drop=True)
         
-        print(f"Running backtest with optimal parameters:")
-        print(f"Position Size: {best_params['Position_Size']}")
-        print(f"Stop Loss: {best_params['Stop_Loss']}")
-        print(f"Take Profit: {best_params['Take_Profit']}")
+        # 生成预测
+        with torch.no_grad():
+            predictions = self.model(self.X_test).cpu().numpy()
         
-        # Run backtest
-        backtest_df = self.run_backtest()
+        # 创建回测DataFrame
+        backtest_df = pd.DataFrame({
+            'Date': test_dates,
+            'Actual Volatility': y_test.flatten(),
+            'Predicted Volatility': predictions.flatten(),
+            'Position': np.zeros(len(predictions))  # Will be filled by trading strategy
+        })
+        
+        # Generate trading signals
+        signals = self._generate_signals(backtest_df['Actual Volatility'].values, 
+                                      backtest_df['Predicted Volatility'].values)
+        backtest_df['Position'] = signals
+        
+        # Calculate returns
+        backtest_df['Market Returns'] = backtest_df['Actual Volatility'].pct_change()
+        backtest_df['Strategy Returns'] = backtest_df['Position'].shift(1) * backtest_df['Market Returns']
+        
+        # Calculate directional accuracy
+        backtest_df['Directional Accuracy'] = (
+            (backtest_df['Actual Volatility'].diff() > 0) == 
+            (backtest_df['Predicted Volatility'].diff() > 0)
+        ).astype(float)
+        
+        # Drop NaN values from returns calculations
+        backtest_df = backtest_df.dropna()
+        
+        # Calculate performance metrics
         metrics = self.calculate_performance_metrics(backtest_df)
-        
-        # Plot results
-        self.plot_results(backtest_df, metrics)
         
         return backtest_df, metrics
 
+def plot_backtest_results(backtest_df):
+    """
+    Plot backtest results including cumulative returns and volatility predictions with trade signals
+    
+    Args:
+        backtest_df (pd.DataFrame): DataFrame containing backtest results
+    """
+    # Create results directory if it doesn't exist
+    os.makedirs('results', exist_ok=True)
+    
+    # Plot cumulative returns with trade signals
+    plt.figure(figsize=(15, 8))
+    cumulative_returns = (1 + backtest_df['Strategy Returns']).cumprod()
+    market_returns = (1 + backtest_df['Market Returns']).cumprod()
+    
+    # Plot returns
+    plt.plot(backtest_df['Date'], cumulative_returns, label='Strategy Returns', color='blue')
+    plt.plot(backtest_df['Date'], market_returns, label='Market Returns', color='gray', alpha=0.5)
+    
+    # Add trade signals
+    long_signals = backtest_df[backtest_df['Position'] > 0]
+    short_signals = backtest_df[backtest_df['Position'] < 0]
+    
+    # Plot long and short positions
+    plt.scatter(long_signals['Date'], 
+               (1 + long_signals['Strategy Returns']).cumprod(),
+               color='green', marker='^', label='Long Signal', alpha=0.7)
+    plt.scatter(short_signals['Date'],
+               (1 + short_signals['Strategy Returns']).cumprod(),
+               color='red', marker='v', label='Short Signal', alpha=0.7)
+    
+    plt.title('Cumulative Returns and Trading Signals')
+    plt.xlabel('Date')
+    plt.ylabel('Cumulative Returns')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('results/backtest_cumulative_returns.png')
+    plt.close()
+    
+    # Plot volatility predictions vs actual with trade signals
+    plt.figure(figsize=(15, 8))
+    plt.plot(backtest_df['Date'], backtest_df['Actual Volatility'], 
+             label='Actual Volatility', color='gray')
+    plt.plot(backtest_df['Date'], backtest_df['Predicted Volatility'],
+             label='Predicted Volatility', color='blue')
+    
+    # Add trade signals on volatility plot
+    plt.scatter(long_signals['Date'], 
+               long_signals['Predicted Volatility'],
+               color='green', marker='^', label='Long Signal', alpha=0.7)
+    plt.scatter(short_signals['Date'],
+               short_signals['Predicted Volatility'],
+               color='red', marker='v', label='Short Signal', alpha=0.7)
+    
+    plt.title('Volatility Prediction and Trading Signals')
+    plt.xlabel('Date')
+    plt.ylabel('Volatility')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('results/backtest_volatility.png')
+    plt.close()
+    
+    # Plot position sizes over time
+    plt.figure(figsize=(15, 8))
+    plt.plot(backtest_df['Date'], backtest_df['Position'], color='blue')
+    plt.fill_between(backtest_df['Date'], 
+                    backtest_df['Position'],
+                    0, 
+                    where=(backtest_df['Position'] > 0),
+                    color='green',
+                    alpha=0.3,
+                    label='Long Position')
+    plt.fill_between(backtest_df['Date'],
+                    backtest_df['Position'],
+                    0,
+                    where=(backtest_df['Position'] < 0),
+                    color='red',
+                    alpha=0.3,
+                    label='Short Position')
+    
+    plt.title('Strategy Position Size')
+    plt.xlabel('Date')
+    plt.ylabel('Position Size')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('results/backtest_positions.png')
+    plt.close()
+    
+    # Plot drawdown
+    plt.figure(figsize=(15, 8))
+    cumulative_returns = (1 + backtest_df['Strategy Returns']).cumprod()
+    running_max = cumulative_returns.expanding().max()
+    drawdown = (cumulative_returns - running_max) / running_max
+    
+    plt.plot(backtest_df['Date'], drawdown, color='red')
+    plt.fill_between(backtest_df['Date'], drawdown, 0, color='red', alpha=0.3)
+    
+    plt.title('Strategy Drawdown Analysis')
+    plt.xlabel('Date')
+    plt.ylabel('Drawdown')
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('results/backtest_drawdown.png')
+    plt.close()
+    
+    # Plot trading accuracy over time
+    plt.figure(figsize=(15, 8))
+    rolling_accuracy = backtest_df['Directional Accuracy'].rolling(window=20).mean()
+    plt.plot(backtest_df['Date'], rolling_accuracy, color='blue', label='20-Period Moving Average')
+    plt.axhline(y=0.5, color='r', linestyle='--', label='Random Level (50%)')
+    
+    plt.title('Strategy Prediction Accuracy (20-Period Moving Average)')
+    plt.xlabel('Date')
+    plt.ylabel('Prediction Accuracy')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.ylim(0, 1)
+    plt.tight_layout()
+    plt.savefig('results/backtest_accuracy.png')
+    plt.close()
+
 def run_backtest(config_path='config.yaml', model_path=None, optimize=False):
     """
-    Run backtest
+    Run backtesting analysis
     
     Args:
         config_path (str): Path to config file
-        model_path (str, optional): Path to model checkpoint. If None, use the best model.
-        optimize (bool): Whether to optimize parameters
-        
-    Returns:
-        tuple: (backtest_df, metrics)
+        model_path (str, optional): Path to model checkpoint
+        optimize (bool): Whether to optimize strategy parameters
     """
-    # Initialize strategy
+    print("Initializing backtesting strategy...")
     strategy = BacktestStrategy(config_path, model_path)
     
-    if optimize:
-        # Run with optimal parameters
-        backtest_df, metrics = strategy.run_with_optimal_parameters()
-    else:
-        # Run backtest
-        backtest_df = strategy.run_backtest()
-        metrics = strategy.calculate_performance_metrics(backtest_df)
-        strategy.plot_results(backtest_df, metrics)
+    print("Running backtest simulation...")
+    backtest_df, metrics = strategy.run()
     
-    # Print metrics
-    print("\nBacktest Performance Metrics:")
-    for key, value in metrics.items():
+    print("\nBacktest Results:")
+    for metric, value in metrics.items():
         if isinstance(value, float):
-            if 'Return' in key or 'Drawdown' in key or 'Rate' in key:
-                print(f"{key}: {value:.2%}")
+            if 'Rate' in metric or 'Return' in metric:
+                print(f"{metric}: {value:.2%}")
             else:
-                print(f"{key}: {value:.4f}")
+                print(f"{metric}: {value:.4f}")
         else:
-            print(f"{key}: {value}")
+            print(f"{metric}: {value}")
     
+    print("\nGenerating plots...")
+    plot_backtest_results(backtest_df)
+    
+    # Save results
+    backtest_df.to_csv('results/backtest_results.csv', index=False)
+    pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value']).to_csv('results/backtest_metrics.csv', index=False)
+    
+    print("\nBacktest completed. Results saved to 'results' directory.")
     return backtest_df, metrics
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Backtest stock prediction model')
+    parser = argparse.ArgumentParser(description='Run backtesting for volatility prediction model')
     parser.add_argument('--config', type=str, default='config.yaml', help='Path to config file')
     parser.add_argument('--model_path', type=str, default=None, help='Path to model checkpoint')
-    parser.add_argument('--optimize', action='store_true', help='Optimize trading parameters')
-    
+    parser.add_argument('--optimize', action='store_true', help='Optimize strategy parameters')
     args = parser.parse_args()
     
     run_backtest(args.config, args.model_path, args.optimize)
