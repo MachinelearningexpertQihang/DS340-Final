@@ -111,21 +111,15 @@ Current implemented trading strategies include:
 
 ## Performance Metrics
 
-Backtest results show:
+Latest backtest results show:
 
-- Total Return: +4.59% (compared to Buy & Hold -14.61%)
-- Annualized Return: +1.19%
-- Maximum Drawdown: -7.31%
-- Sharpe Ratio: 0.3856
-- Win Rate: 60%
-
-## Contributing
-
-Pull Requests are welcome to improve this project. Here are some areas for improvement:
-
-1. Add more technical indicators
-2. Implement new trading strategies
-3. Optimize model architecture
-4. Improve backtesting system
-5. Add more risk management mechanisms
+- Total Return: +15.84%
+- Annual Return: +3.96%
+- Volatility: 17.27%
+- Sharpe Ratio: 0.1137
+- Maximum Drawdown: -16.35%
+- Number of Trades: 390
+- Win Rate: 18.97%
+- Volatility Prediction Accuracy: 77.33%
+- Average Position Size: 50%
 
