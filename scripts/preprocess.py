@@ -12,7 +12,7 @@ def preprocess_data(config_path):
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'])
     elif 'date' in df.columns:
-        df['Date'] = pd.to_datetime(df['date'])  # 将小写的 'date' 统一命名为 'Date'
+        df['Date'] = pd.to_datetime(df['date']) 
         df.drop(columns=['date'], inplace=True)
     else:
         raise KeyError("No date column found in data.")
