@@ -16,7 +16,7 @@ data:
 
 # Model configuration
 model:
-  type: "gru_transformer"  # Options: gru, transformer, gru_transformer
+  type: "gru"  # Options: gru, transformer, gru_transformer
   dropout: 0.2
   
   # GRU parameters

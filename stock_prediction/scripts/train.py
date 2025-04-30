@@ -32,6 +32,32 @@ def train_model(config_path='config.yaml'):
     train_data = torch.load(train_data_path, weights_only=False)  # 显式设置 weights_only=False
     X_train, y_train = train_data['X'], train_data['y']
     
+    # Load validation data
+    val_data_path = os.path.join(config['paths']['processed_data_dir'], 'val_data.pt')
+    if os.path.exists(val_data_path):
+        val_data = torch.load(val_data_path, weights_only=False)
+        X_val, y_val = val_data['X'], val_data['y']
+        # Move validation data to device
+        X_val = X_val.to(device)
+        y_val = y_val.to(device)
+        use_validation = True
+        print(f"Validation data loaded, shape: {X_val.shape}")
+    else:
+        # If no validation data found, split training data
+        val_size = int(len(X_train) * 0.2)  # 使用20%的训练数据作为验证集
+        indices = torch.randperm(len(X_train))
+        train_indices = indices[val_size:]
+        val_indices = indices[:val_size]
+        
+        X_val, y_val = X_train[val_indices], y_train[val_indices]
+        X_train, y_train = X_train[train_indices], y_train[train_indices]
+        
+        # Move validation data to device
+        X_val = X_val.to(device)
+        y_val = y_val.to(device)
+        use_validation = True
+        print(f"Validation data created from training set, shape: {X_val.shape}")
+    
     # Create dataset and dataloader
     train_dataset = TensorDataset(X_train, y_train)
     train_loader = DataLoader(
@@ -102,16 +128,18 @@ def train_model(config_path='config.yaml'):
     # Training loop
     num_epochs = config['training']['num_epochs']
     train_losses = []
+    val_losses = []
     
     # Create directory for model checkpoints
     os.makedirs(config['paths']['model_dir'], exist_ok=True)
     
-    best_loss = float('inf')
+    best_val_loss = float('inf')
     
     print(f"Starting training for {num_epochs} epochs...")
     start_time = time.time()
     
     for epoch in range(num_epochs):
+        # Training phase
         model.train()
         epoch_loss = 0
         
@@ -139,24 +167,43 @@ def train_model(config_path='config.yaml'):
             epoch_loss += loss.item()
             progress_bar.set_postfix({'loss': epoch_loss / (batch_idx + 1)})
         
-        # Calculate average loss for the epoch
-        avg_loss = epoch_loss / len(train_loader)
-        train_losses.append(avg_loss)
+        # Calculate average training loss for the epoch
+        avg_train_loss = epoch_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
         
-        # Update learning rate scheduler
-        if config['training']['use_lr_scheduler']:
-            scheduler.step(avg_loss)
-        
-        # Save best model
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            save_model(model, os.path.join(config['paths']['model_dir'], 'best_model.pth'))
+        # Validation phase
+        if use_validation:
+            model.eval()
+            with torch.no_grad():
+                val_outputs = model(X_val)
+                val_loss = criterion(val_outputs, y_val)
+                val_losses.append(val_loss.item())
+            
+            print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {val_loss.item():.6f}")
+            
+            # Update learning rate scheduler based on validation loss
+            if config['training']['use_lr_scheduler']:
+                scheduler.step(val_loss.item())
+            
+            # Save best model based on validation loss
+            if val_loss.item() < best_val_loss:
+                best_val_loss = val_loss.item()
+                save_model(model, os.path.join(config['paths']['model_dir'], 'best_model.pth'))
+        else:
+            print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.6f}")
+            
+            # Update learning rate scheduler based on training loss
+            if config['training']['use_lr_scheduler']:
+                scheduler.step(avg_train_loss)
+            
+            # Save best model based on training loss
+            if avg_train_loss < best_val_loss:
+                best_val_loss = avg_train_loss
+                save_model(model, os.path.join(config['paths']['model_dir'], 'best_model.pth'))
         
         # Save checkpoint
         if (epoch + 1) % config['training']['save_interval'] == 0:
             save_model(model, os.path.join(config['paths']['model_dir'], f'model_epoch_{epoch+1}.pth'))
-        
-        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.6f}")
     
     # Save final model
     save_model(model, os.path.join(config['paths']['model_dir'], 'final_model.pth'))
@@ -165,17 +212,20 @@ def train_model(config_path='config.yaml'):
     training_time = time.time() - start_time
     print(f"Training completed in {training_time:.2f} seconds")
     
-    # Plot training loss
+    # Plot training and validation loss
     plt.figure(figsize=(10, 5))
-    plt.plot(train_losses)
-    plt.title('Training Loss')
+    plt.plot(train_losses, label='Training Loss')
+    if use_validation:
+        plt.plot(val_losses, label='Validation Loss')
+    plt.title('Training and Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
+    plt.legend()
     plt.grid(True)
     
     # Create results directory if it doesn't exist
     os.makedirs('results', exist_ok=True)
-    plt.savefig('results/training_loss.png')
+    plt.savefig('results/training_validation_loss.png')
     plt.close()
     
     return model

@@ -23,7 +23,7 @@ class BacktestStrategy:
         self.device = torch.device('cuda' if torch.cuda.is_available() and self.config['training']['use_gpu'] else 'cpu')
         print(f"Using device: {self.device}")
         
-        # 添加所需的安全全局对象
+        
         torch.serialization.add_safe_globals([MinMaxScaler, ma._reconstruct])
         
         # Load test data

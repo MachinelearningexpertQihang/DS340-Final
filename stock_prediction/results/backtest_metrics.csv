@@ -1,10 +1,10 @@
 Metric,Value
-Total Return,0.15836834022374036
-Annual Return,0.03963970526723326
-Volatility,0.17272718784397278
-Sharpe Ratio,0.11370361268762227
-Max Drawdown,-0.16351565892613948
-Number of Trades,390.0
-Win Rate,0.18974358974358974
-Volatility Prediction Accuracy,0.7733473242392445
+Total Return,0.04967904949129598
+Annual Return,0.012903189032463347
+Volatility,0.17275156176191866
+Sharpe Ratio,-0.04108102349498454
+Max Drawdown,-0.16351565892613937
+Number of Trades,370.0
+Win Rate,0.20540540540540542
+Volatility Prediction Accuracy,0.7429171038824763
 Average Position Size,0.5

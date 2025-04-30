@@ -26,11 +26,6 @@ Our model achieves:
 - MAE: 0.0376
 - R²: 0.9834
 
-Trading strategy performance:
-- Total Return: +4.59%
-- Sharpe Ratio: 0.3856
-- Maximum Drawdown: -7.31%
-- Win Rate: 60%
 
 ## Project Organization
 
@@ -57,8 +52,9 @@ python scripts/download_data.py
 python scripts/preprocess.py
 ```
 
-3. Train the model:
+3. Train and evaluate the model:
 ```bash
+python main.py --mode train
 python main.py --mode train
 ```
 

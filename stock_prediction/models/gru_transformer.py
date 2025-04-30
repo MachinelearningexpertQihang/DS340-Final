@@ -48,6 +48,9 @@ class GRUTransformerModel(nn.Module):
         # Fusion layer
         self.fusion = nn.Linear(gru_hidden_dim + transformer_d_model, output_dim)
         
+        # Loss function for validation
+        self.criterion = nn.MSELoss()
+        
     def forward(self, x, mask=None):
         """
         Forward pass
@@ -72,3 +75,43 @@ class GRUTransformerModel(nn.Module):
         output = self.fusion(combined_features)
         
         return output
+    
+    def calculate_loss(self, predictions, targets):
+        """
+        Calculate loss for training or validation
+        
+        Args:
+            predictions (torch.Tensor): Predicted values from the model
+            targets (torch.Tensor): Target values
+            
+        Returns:
+            torch.Tensor: Calculated loss
+        """
+        return self.criterion(predictions, targets)
+    
+    def validate(self, x, targets, mask=None):
+        """
+        Run validation and return loss
+        
+        Args:
+            x (torch.Tensor): Input tensor
+            targets (torch.Tensor): Target values
+            mask (torch.Tensor, optional): Mask for transformer
+            
+        Returns:
+            torch.Tensor: Validation loss
+        """
+        # Set model to evaluation mode
+        self.eval()
+        
+        with torch.no_grad():
+            # Get predictions
+            predictions = self(x, mask)
+            
+            # Calculate validation loss
+            val_loss = self.calculate_loss(predictions, targets)
+            
+        # Set model back to training mode
+        self.train()
+        
+        return val_loss
